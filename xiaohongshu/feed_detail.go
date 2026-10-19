@@ -108,8 +108,12 @@ func (f *FeedDetailAction) GetFeedDetailWithConfig(ctx context.Context, feedID, 
 	// 使用retry-go处理页面导航和DOM稳定等待
 	err := retry.Do(
 		func() error {
+			started := time.Now()
 			page.MustNavigate(url)
+			logPhase("detail_navigate", started)
+			started = time.Now()
 			waitFeedPageReady(page)
+			logPhase("detail_ready", started)
 			return nil
 		},
 		retry.Attempts(3),
@@ -123,11 +127,15 @@ func (f *FeedDetailAction) GetFeedDetailWithConfig(ctx context.Context, feedID, 
 		logrus.Errorf("页面导航失败: %v", err)
 		return nil, err
 	}
+	started := time.Now()
 	humanize.Delay(ctx, humanize.AfterNavigate)
+	logPhase("detail_delay", started)
 
+	started = time.Now()
 	if err := checkPageAccessible(page); err != nil {
 		return nil, err
 	}
+	logPhase("detail_access_check", started)
 
 	if loadAllComments {
 		if err := f.loadAllCommentsWithConfig(ctx, page, config); err != nil {
@@ -140,7 +148,10 @@ func (f *FeedDetailAction) GetFeedDetailWithConfig(ctx context.Context, feedID, 
 		return nil, err
 	}
 
-	return f.extractFeedDetail(page, feedID)
+	started = time.Now()
+	result, err := f.extractFeedDetail(page, feedID)
+	logPhase("detail_extract", started)
+	return result, err
 }
 
 // ========== 评论加载器 ==========
@@ -891,18 +902,15 @@ func checkEndContainer(page *rod.Page) bool {
 // ========== 页面检查 ==========
 
 func checkPageAccessible(page *rod.Page) error {
-	// 等错误提示 UI 渲染出来再检查
-	time.Sleep(500 * time.Millisecond)
-
-	// 查找错误提示容器
-	wrapperEl, err := page.Timeout(2 * time.Second).Element(".access-wrapper, .error-wrapper, .not-found-wrapper, .blocked-wrapper")
-	if err != nil {
+	// 已等待数据或错误提示就绪，正常页面无需轮询不存在的错误容器。
+	wrappers, err := page.Elements(".access-wrapper, .error-wrapper, .not-found-wrapper, .blocked-wrapper")
+	if err != nil || len(wrappers) == 0 {
 		// 未找到错误容器，说明页面可访问
 		return nil
 	}
 
 	// 获取文本内容
-	text, err := wrapperEl.Text()
+	text, err := wrappers[0].Text()
 	if err != nil {
 		// 无法获取文本，假设页面可访问
 		return nil
