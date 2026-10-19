@@ -67,7 +67,7 @@ func (n *NavigateAction) ToProfilePage(ctx context.Context, tabs ...ProfileTab) 
 		q.Set("subTab", "note")
 		target.RawQuery = q.Encode()
 	}
-	if err := navigateProfileDocument(page, target.String()); err != nil {
+	if err := navigateDocument(page, target.String()); err != nil {
 		return err
 	}
 
@@ -76,7 +76,7 @@ func (n *NavigateAction) ToProfilePage(ctx context.Context, tabs ...ProfileTab) 
 }
 
 // 等新文档提交后的 DOMContentLoaded，不等图片等资源的 load 事件。
-func navigateProfileDocument(page *rod.Page, target string) error {
+func navigateDocument(page *rod.Page, target string) error {
 	ctx, cancel := context.WithCancel(page.GetContext())
 	defer cancel()
 	p := page.Context(ctx)

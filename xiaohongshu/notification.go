@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -148,25 +149,41 @@ func (n *NotificationAction) List(ctx context.Context, tab NotificationTab, limi
 		limit = 20
 	}
 
-	page := n.page.Timeout(3 * time.Minute)
+	page := n.page.Context(ctx).Timeout(3 * time.Minute)
+	defer page.CancelTimeout()
+	ctx = page.GetContext()
 
-	page.MustNavigate("https://www.xiaohongshu.com/notification").MustWaitLoad()
-	humanize.Delay(ctx, humanize.AfterNavigate)
+	started := time.Now()
+	if err := navigateDocument(page, "https://www.xiaohongshu.com/notification"); err != nil {
+		return nil, fmt.Errorf("打开通知页面失败: %w", err)
+	}
+	logPhase("notification_document", started)
+	started = time.Now()
+	if err := waitNotificationPageBoot(page); err != nil {
+		return nil, fmt.Errorf("等待通知页面失败: %w", err)
+	}
+	logPhase("notification_ready", started)
 
+	started = time.Now()
 	if err := n.switchTab(ctx, page, tab); err != nil {
 		return nil, err
 	}
+	logPhase("notification_switch", started)
 
+	started = time.Now()
 	if err := n.loadUntil(ctx, page, tab, limit); err != nil {
 		return nil, err
 	}
+	logPhase("notification_pagination", started)
 
+	started = time.Now()
 	payload, err := n.readTab(page, tab)
 	if err != nil {
 		return nil, err
 	}
 
 	items, filtered := convertNotifications(payload.MessageList, limit)
+	logPhase("notification_extract", started)
 	return &NotificationList{Tab: tab, Filtered: filtered, Items: items}, nil
 }
 
@@ -176,61 +193,62 @@ func (n *NotificationAction) switchTab(ctx context.Context, page *rod.Page, tab 
 		return nil
 	}
 
-	label := tabLabels[tab]
-	elems, err := page.Elements(`.reds-tab-item`)
+	label, ok := tabLabels[tab]
+	if !ok {
+		return fmt.Errorf("未知通知分区 %q", tab)
+	}
+	elem, err := page.Context(ctx).Timeout(10*time.Second).ElementR(`.reds-tab-item`, `^\s*`+regexp.QuoteMeta(label)+`\s*$`)
 	if err != nil {
 		return fmt.Errorf("未找到通知分区标签: %w", err)
 	}
 
-	for _, elem := range elems {
-		text, err := elem.Text()
-		if err != nil || strings.TrimSpace(text) != label {
-			continue
-		}
-		humanize.Delay(ctx, humanize.BeforeClick)
-		if err := humanize.Click(elem); err != nil {
-			return fmt.Errorf("切换到分区 %s 失败: %w", label, err)
-		}
-		humanize.Delay(ctx, humanize.AfterClick)
-		return nil
+	humanize.Delay(ctx, humanize.BeforeClick)
+	if err := humanize.Click(elem); err != nil {
+		return fmt.Errorf("切换到分区 %s 失败: %w", label, err)
 	}
-	return fmt.Errorf("未找到分区标签 %q", label)
+	return nil
 }
 
 // loadUntil 滚动加载，直到条目数够用或没有更多。
 func (n *NotificationAction) loadUntil(ctx context.Context, page *rod.Page, tab NotificationTab, limit int) error {
 	const maxRounds = 20
+	page = page.Context(ctx)
+	started := time.Now()
+	if err := waitNotificationTabReady(page, tab, nil); err != nil {
+		return fmt.Errorf("等待通知分区 %s 失败: %w", tab, err)
+	}
+	logPhase("notification_tab_ready", started)
 
-	for range maxRounds {
+	for round := 0; ; round++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		payload, err := n.readTab(page, tab)
 		if err != nil {
 			return err
 		}
-		loaded := len(payload.MessageList)
-		if loaded >= limit || !payload.HasMore {
+		items, _ := convertNotifications(payload.MessageList, limit)
+		if len(items) >= limit || !payload.HasMore {
 			return nil
+		}
+		if round >= maxRounds {
+			return fmt.Errorf("通知分页达到 %d 轮上限，尚未取得足够条目", maxRounds)
 		}
 
 		if err := page.Mouse.Scroll(0, 800, 5); err != nil {
 			return fmt.Errorf("滚动加载失败: %w", err)
 		}
-		humanize.Delay(ctx, humanize.BetweenScroll)
-
-		if after, err := n.readTab(page, tab); err == nil && len(after.MessageList) == loaded {
-			humanize.Delay(ctx, humanize.Reading)
-		}
-
-		if err := ctx.Err(); err != nil {
-			return err
+		if err := waitNotificationScroll(page, tab, payload); err != nil {
+			return fmt.Errorf("等待通知下一页失败: %w", err)
 		}
 	}
-	return nil
 }
 
 // 页面状态里通知列表的原始结构。字段名与状态一致，解析交给 encoding/json。
 type (
 	notificationPayload struct {
 		HasMore     bool              `json:"hasMore"`
+		Cursor      string            `json:"cursor"`
 		MessageList []rawNotification `json:"messageList"`
 	}
 

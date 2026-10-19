@@ -94,7 +94,7 @@ func TestAccountReadinessWaitsForNewDocument(t *testing.T) {
 	defer p.Close()
 	p.MustSetDocumentContent(`<script>window.__INITIAL_STATE__={user:{userFetchingStatus:'resolved',userNoteFetchingStatus:['resolved'],isFetchingNotes:[false],userPageData:{value:{basicInfo:{nickname:'old'},interactions:[]}},notes:{value:[[]]},activeTab:{value:{query:'note',index:0}}}}</script>`)
 	started := time.Now()
-	require.NoError(t, navigateProfileDocument(p.Timeout(3*time.Second), s.URL))
+	require.NoError(t, navigateDocument(p.Timeout(3*time.Second), s.URL))
 	require.NoError(t, waitProfilePageReady(p.Timeout(2*time.Second), TabNotes))
 	require.Equal(t, "new", p.MustEval(`()=>window.__INITIAL_STATE__.user.userPageData.value.basicInfo.nickname`).Str())
 	require.Less(t, time.Since(started), 2*time.Second)
@@ -117,10 +117,10 @@ func TestAccountReadinessNavigationFailureCleanup(t *testing.T) {
 	defer b.Close()
 	p := b.NewPage()
 	defer p.Close()
-	require.Error(t, navigateProfileDocument(p.Timeout(time.Second), "http://[invalid"))
+	require.Error(t, navigateDocument(p.Timeout(time.Second), "http://[invalid"))
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "<html>ready</html>") }))
 	defer s.Close()
-	require.NoError(t, navigateProfileDocument(p.Timeout(2*time.Second), s.URL))
+	require.NoError(t, navigateDocument(p.Timeout(2*time.Second), s.URL))
 }
 
 func TestAccountReadinessWaitsForCompleteState(t *testing.T) {

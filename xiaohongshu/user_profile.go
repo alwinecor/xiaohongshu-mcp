@@ -56,7 +56,7 @@ func (u *UserProfileAction) UserProfile(ctx context.Context, userID, xsecToken s
 
 	searchURL := makeUserProfileURL(userID, xsecToken, tab)
 	started := time.Now()
-	if err := navigateProfileDocument(page, searchURL); err != nil {
+	if err := navigateDocument(page, searchURL); err != nil {
 		return nil, err
 	}
 	logPhase("profile_navigate", started)
