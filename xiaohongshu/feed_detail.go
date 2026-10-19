@@ -138,8 +138,11 @@ func (f *FeedDetailAction) GetFeedDetailWithConfig(ctx context.Context, feedID, 
 	logPhase("detail_access_check", started)
 
 	if loadAllComments {
-		if err := f.loadAllCommentsWithConfig(ctx, page, config); err != nil {
-			logrus.Warnf("加载全部评论失败: %v", err)
+		started = time.Now()
+		err := f.loadAllCommentsWithConfig(ctx, page, config)
+		logPhase("detail_comments", started)
+		if err != nil {
+			return nil, fmt.Errorf("加载评论未完成: %w", err)
 		}
 	}
 
@@ -187,16 +190,19 @@ func (f *FeedDetailAction) loadAllCommentsWithConfig(ctx context.Context, page *
 }
 
 func (cl *commentLoader) load(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	maxAttempts := cl.calculateMaxAttempts()
 
 	logrus.Info("开始加载评论...")
-	scrollToCommentsArea(cl.page)
-	humanize.Delay(ctx, humanize.BetweenScroll)
-
-	// 检查是否没有评论
 	if cl.checkNoComments() {
 		return nil
 	}
+	if complete, err := cl.checkComplete(ctx); complete || err != nil {
+		return err
+	}
+	scrollToCommentsArea(cl.page)
 
 	for cl.stats.attempts = 0; cl.stats.attempts < maxAttempts; cl.stats.attempts++ {
 		// 协作取消点：ctx 取消后干净退出，避免空转直到撞上 MustEval panic
@@ -207,12 +213,17 @@ func (cl *commentLoader) load(ctx context.Context) error {
 
 		logrus.Debugf("=== 尝试 %d/%d ===", cl.stats.attempts+1, maxAttempts)
 
-		if cl.checkComplete(ctx) {
+		if cl.checkNoComments() {
 			return nil
+		}
+		if complete, err := cl.checkComplete(ctx); complete || err != nil {
+			return err
 		}
 
 		if cl.shouldClickButtons() {
-			cl.clickButtonsWithRetry(ctx)
+			if _, err := cl.clickButtonsWithRetry(ctx); err != nil {
+				return err
+			}
 		}
 
 		currentCount := getCommentCount(cl.page)
@@ -225,7 +236,9 @@ func (cl *commentLoader) load(ctx context.Context) error {
 		cl.performScroll(ctx)
 		cl.handleStagnation(ctx)
 
-		humanize.Delay(ctx, humanize.BetweenScroll)
+		if err := waitForCommentProgress(ctx, cl.page, currentCount); err != nil {
+			return err
+		}
 	}
 
 	cl.performFinalSprint(ctx)
@@ -247,24 +260,26 @@ func (cl *commentLoader) checkNoComments() bool {
 	return false
 }
 
-func (cl *commentLoader) checkComplete(ctx context.Context) bool {
+func (cl *commentLoader) checkComplete(ctx context.Context) (bool, error) {
 	if !checkEndContainer(cl.page) {
-		return false
+		return false, nil
 	}
 
 	// 到底之后再展开一轮：评论区不用怎么滚就能到底时，循环第一轮就走到这里，
 	// 主流程里的展开步骤根本没机会执行。点开了就先不算加载完，让下一轮重新判断
 	// （展开会露出新的按钮）；一个都没点开就收工，避免被阈值跳过的按钮卡住。
-	if cl.config.ClickMoreReplies && cl.clickButtonsWithRetry(ctx) > 0 {
-		return false
+	if cl.config.ClickMoreReplies {
+		clicked, err := cl.clickButtonsWithRetry(ctx)
+		if clicked > 0 || err != nil {
+			return false, err
+		}
 	}
 
 	currentCount := getCommentCount(cl.page)
 	logrus.Infof("✓ 检测到 'THE END' 元素，已滑动到底部")
-	humanize.Delay(ctx, humanize.BetweenScroll)
 	logrus.Infof("✓ 加载完成: %d 条评论, 尝试次数: %d, 点击: %d, 跳过: %d",
 		currentCount, cl.stats.attempts+1, cl.stats.totalClicked, cl.stats.totalSkipped)
-	return true
+	return true, nil
 }
 
 func (cl *commentLoader) shouldClickButtons() bool {
@@ -272,10 +287,13 @@ func (cl *commentLoader) shouldClickButtons() bool {
 }
 
 // clickButtonsWithRetry 展开当前页上的回复按钮，返回本次点开的个数。
-func (cl *commentLoader) clickButtonsWithRetry(ctx context.Context) int {
-	clicked, skipped := clickShowMoreButtonsSmart(ctx, cl.page, cl.config.MaxRepliesThreshold)
+func (cl *commentLoader) clickButtonsWithRetry(ctx context.Context) (int, error) {
+	clicked, skipped, err := clickShowMoreButtonsSmart(ctx, cl.page, cl.config.MaxRepliesThreshold)
+	if err != nil {
+		return clicked, err
+	}
 	if clicked == 0 && skipped == 0 {
-		return 0
+		return 0, nil
 	}
 
 	cl.stats.totalClicked += clicked
@@ -286,7 +304,10 @@ func (cl *commentLoader) clickButtonsWithRetry(ctx context.Context) int {
 	humanize.Delay(ctx, humanize.Reading)
 
 	// 重试一轮
-	clicked2, skipped2 := clickShowMoreButtonsSmart(ctx, cl.page, cl.config.MaxRepliesThreshold)
+	clicked2, skipped2, err := clickShowMoreButtonsSmart(ctx, cl.page, cl.config.MaxRepliesThreshold)
+	if err != nil {
+		return clicked + clicked2, err
+	}
 	if clicked2 > 0 || skipped2 > 0 {
 		cl.stats.totalClicked += clicked2
 		cl.stats.totalSkipped += skipped2
@@ -294,7 +315,7 @@ func (cl *commentLoader) clickButtonsWithRetry(ctx context.Context) int {
 		humanize.Delay(ctx, humanize.Reading)
 	}
 
-	return clicked + clicked2
+	return clicked + clicked2, nil
 }
 
 func (cl *commentLoader) updateState(currentCount int) {
@@ -381,10 +402,10 @@ func (cl *commentLoader) performFinalSprint(ctx context.Context) {
 
 // ========== 按钮点击 ==========
 
-func clickShowMoreButtonsSmart(ctx context.Context, page *rod.Page, maxRepliesThreshold int) (clicked, skipped int) {
+func clickShowMoreButtonsSmart(ctx context.Context, page *rod.Page, maxRepliesThreshold int) (clicked, skipped int, err error) {
 	elements, err := page.Elements(".show-more")
 	if err != nil {
-		return 0, 0
+		return 0, 0, err
 	}
 
 	replyCountRegex := regexp.MustCompile(`展开\s*(\d+)\s*条回复`)
@@ -414,13 +435,28 @@ func clickShowMoreButtonsSmart(ctx context.Context, page *rod.Page, maxRepliesTh
 			continue
 		}
 
+		parents, err := el.Parents(".parent-comment")
+		if err != nil {
+			return clicked, skipped, err
+		}
+		if len(parents) == 0 {
+			return clicked, skipped, fmt.Errorf("无法定位展开回复所属的评论")
+		}
+		parent := parents[0]
+		items, err := parent.Elements(".comment-item")
+		if err != nil {
+			return clicked, skipped, err
+		}
 		if clickElementWithHumanBehavior(ctx, page, el, text) {
 			clicked++
 			clickedInRound++
+			if err := waitForExpandedReplies(ctx, parent, len(items)); err != nil {
+				return clicked, skipped, fmt.Errorf("等待子回复失败: %w", err)
+			}
 		}
 	}
 
-	return clicked, skipped
+	return clicked, skipped, nil
 }
 
 // expandNearbyReplies 展开视口附近的「展开 N 条回复」，返回本轮点开的个数。
@@ -839,64 +875,85 @@ func getTotalCommentCount(page *rod.Page) int {
 }
 
 func checkNoCommentsArea(page *rod.Page) bool {
-	// 查找无评论区域
-	noCommentsEl, err := page.Timeout(2 * time.Second).Element(".no-comments-text")
-	if err != nil {
-		// 未找到无评论元素，说明有评论或评论区正常
+	// 已有评论时，忽略渲染切换中残留的空提示。
+	if getCommentCount(page) > 0 {
 		return false
 	}
-
-	// 获取文本内容
-	text, err := noCommentsEl.Text()
-	if err != nil {
-		return false
-	}
-
-	// 检查是否包含"这是一片荒地"等关键词
-	text = strings.TrimSpace(text)
-	return strings.Contains(text, "这是一片荒地")
+	return hasVisibleCommentMarker(page, ".no-comments-text", func(text string) bool {
+		return strings.Contains(text, "这是一片荒地")
+	})
 }
 
 func checkEndContainer(page *rod.Page) bool {
-	var result bool
+	return hasVisibleCommentMarker(page, ".end-container", func(text string) bool {
+		upper := strings.ToUpper(text)
+		return strings.Contains(upper, "THE END") || strings.Contains(upper, "THEEND")
+	})
+}
 
-	// 使用retry-go来处理可能的DOM查询失败
-	err := retry.Do(
-		func() error {
-			// 使用 Go 查找结束容器
-			endEl, err := page.Timeout(2 * time.Second).Element(".end-container")
-			if err != nil {
-				// 未找到元素，说明未到底部
-				result = false
-				return nil
-			}
-
-			// 获取文本内容
-			text, err := endEl.Text()
-			if err != nil {
-				result = false
-				return nil
-			}
-
-			// 转换为大写并检查
-			textUpper := strings.ToUpper(strings.TrimSpace(text))
-			result = strings.Contains(textUpper, "THE END") || strings.Contains(textUpper, "THEEND")
-			return nil
-		},
-		retry.Attempts(3),
-		retry.Delay(100*time.Millisecond),
-		retry.MaxJitter(200*time.Millisecond),
-		retry.OnRetry(func(n uint, err error) {
-			logrus.Debugf("检查结束容器重试 #%d: %v", n, err)
-		}),
-	)
-
+// 标志缺席时立即继续，由滚动后的统一等待负责处理延迟渲染。
+func hasVisibleCommentMarker(page *rod.Page, selector string, matches func(string) bool) bool {
+	elements, err := page.Elements(selector)
 	if err != nil {
-		logrus.Warnf("检查结束容器失败: %v", err)
-		return false // 失败时返回false
+		return false
 	}
+	for _, element := range elements {
+		visible, err := element.Visible()
+		if err != nil || !visible {
+			continue
+		}
+		text, err := element.Text()
+		if err == nil && matches(strings.TrimSpace(text)) {
+			return true
+		}
+	}
+	return false
+}
 
-	return result
+// 没有变化只结束本轮等待，不把初始空列表或短暂卡顿视为加载完成。
+func waitForCommentProgress(ctx context.Context, page *rod.Page, previousCount int) error {
+	waitCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	p := page.Context(waitCtx)
+	ticker := time.NewTicker(150 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		elements, err := p.Elements(".parent-comment")
+		if err == nil && (len(elements) != previousCount || checkNoCommentsArea(p) || checkEndContainer(p)) {
+			return ctx.Err()
+		}
+		if err != nil && waitCtx.Err() == nil {
+			return fmt.Errorf("等待评论变化失败: %w", err)
+		}
+		select {
+		case <-waitCtx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+// 展开按钮消失不代表回复已到达；已有 THE END 也不能跳过此等待。
+func waitForExpandedReplies(ctx context.Context, parent *rod.Element, previousCount int) error {
+	waitCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	element := parent.Context(waitCtx)
+	ticker := time.NewTicker(150 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		items, err := element.Elements(".comment-item")
+		if err != nil {
+			return err
+		}
+		if len(items) > previousCount {
+			return nil
+		}
+		select {
+		case <-waitCtx.Done():
+			return waitCtx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 // ========== 页面检查 ==========
