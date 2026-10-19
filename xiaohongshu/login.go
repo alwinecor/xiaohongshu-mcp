@@ -20,9 +20,16 @@ func NewLogin(page *rod.Page) *LoginAction {
 func (a *LoginAction) CheckLoginStatus(ctx context.Context) (bool, error) {
 	// 加超时保护：只是查登录态的快速检查，不应无限挂（登录扫码的等待在 Login/WaitForLogin 里）
 	pp := a.page.Context(ctx).Timeout(30 * time.Second)
-	pp.MustNavigate("https://www.xiaohongshu.com/explore").MustWaitLoad()
-
-	time.Sleep(1 * time.Second)
+	started := time.Now()
+	if err := pp.Navigate("https://www.xiaohongshu.com/explore"); err != nil {
+		return false, errors.Wrap(err, "navigate login page failed")
+	}
+	logPhase("login_navigate", started)
+	started = time.Now()
+	if err := waitLoginPageReady(pp); err != nil {
+		return false, errors.Wrap(err, "wait login state failed")
+	}
+	logPhase("login_ready", started)
 
 	exists, _, err := pp.Has(`.main-container .user .link-wrapper .channel`)
 	if err != nil {

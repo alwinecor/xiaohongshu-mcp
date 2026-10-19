@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/sirupsen/logrus"
 	"github.com/xpzouying/headless_browser"
@@ -48,6 +49,7 @@ func maskProxyCredentials(proxyURL string) string {
 }
 
 func NewBrowser(headless bool, options ...Option) *headless_browser.Browser {
+	started := time.Now()
 	cfg := &browserConfig{}
 	for _, opt := range options {
 		opt(cfg)
@@ -97,5 +99,7 @@ func NewBrowser(headless bool, options ...Option) *headless_browser.Browser {
 		logrus.Warnf("failed to load cookies: %v", err)
 	}
 
-	return headless_browser.New(opts...)
+	b := headless_browser.New(opts...)
+	logrus.WithFields(logrus.Fields{"phase": "browser_start", "elapsed_ms": time.Since(started).Milliseconds()}).Info("performance")
+	return b
 }

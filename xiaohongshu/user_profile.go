@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -54,8 +55,16 @@ func (u *UserProfileAction) UserProfile(ctx context.Context, userID, xsecToken s
 	page := u.page.Context(ctx).Timeout(60 * time.Second) // 重设被 .Context 清掉的 deadline
 
 	searchURL := makeUserProfileURL(userID, xsecToken, tab)
-	page.MustNavigate(searchURL)
-	page.MustWaitStable()
+	started := time.Now()
+	if err := navigateDocument(page, searchURL); err != nil {
+		return nil, err
+	}
+	logPhase("profile_navigate", started)
+	started = time.Now()
+	if err := waitProfilePageReady(page, tab); err != nil {
+		return nil, fmt.Errorf("等待用户主页失败: %w", err)
+	}
+	logPhase("profile_ready", started)
 
 	return u.extractUserProfileData(page, tab)
 }
@@ -69,7 +78,7 @@ func (u *UserProfileAction) extractUserProfileData(page *rod.Page, tab ProfileTa
 		    window.__INITIAL_STATE__.user &&
 		    window.__INITIAL_STATE__.user.userPageData) {
 			const userPageData = window.__INITIAL_STATE__.user.userPageData;
-			const data = userPageData.value !== undefined ? userPageData.value : userPageData._value;
+			const data = userPageData.value !== undefined ? userPageData.value : (userPageData._value !== undefined ? userPageData._value : userPageData);
 			if (data) {
 				return JSON.stringify(data);
 			}
@@ -85,7 +94,7 @@ func (u *UserProfileAction) extractUserProfileData(page *rod.Page, tab ProfileTa
 	notesResult := page.MustEval(`() => {
 		const u = window.__INITIAL_STATE__ && window.__INITIAL_STATE__.user;
 		if (!u || !u.notes) return "";
-		const unwrap = (o) => (o && o.value !== undefined) ? o.value : (o && o._value);
+		const unwrap = (o) => (o && o.value !== undefined) ? o.value : (o && o._value !== undefined ? o._value : o);
 		const notes = unwrap(u.notes);
 		if (!notes) return "";
 		const active = unwrap(u.activeTab) || {};
@@ -152,16 +161,16 @@ func (u *UserProfileAction) GetMyProfileViaSidebar(ctx context.Context, tab Prof
 	navigate := NewNavigate(page)
 
 	// 通过侧边栏导航到个人主页
-	if err := navigate.ToProfilePage(ctx); err != nil {
+	if err := navigate.ToProfilePage(ctx, tab); err != nil {
 		return nil, fmt.Errorf("failed to navigate to profile page via sidebar: %w", err)
 	}
 
-	// 等待页面加载完成并获取 __INITIAL_STATE__
-	page.MustWaitStable()
-
-	if err := u.selectTab(ctx, page, tab); err != nil {
-		return nil, err
+	// 地址已包含目标标签，只等待该标签的完整数据。
+	started := time.Now()
+	if err := waitProfilePageReady(page, tab); err != nil {
+		return nil, fmt.Errorf("等待本人主页失败: %w", err)
 	}
+	logPhase("profile_ready", started)
 
 	return u.extractUserProfileData(page, tab)
 }
@@ -173,23 +182,19 @@ func (u *UserProfileAction) selectTab(ctx context.Context, page *rod.Page, tab P
 	}
 
 	label := tabLabel[tab]
-	elems, err := page.Elements(`.reds-tab-item.sub-tab-list`)
+	elem, err := page.ElementR(`.reds-tab-item.sub-tab-list`, `^\s*`+regexp.QuoteMeta(label)+`\s*$`)
 	if err != nil {
 		return fmt.Errorf("未找到主页子 tab: %w", err)
 	}
-
-	for _, elem := range elems {
-		text, err := elem.Text()
-		if err != nil || strings.TrimSpace(text) != label {
-			continue
-		}
-		humanize.Delay(ctx, humanize.BeforeClick)
-		if err := humanize.Click(elem); err != nil {
-			return fmt.Errorf("切换到 %s 失败: %w", label, err)
-		}
-		humanize.Delay(ctx, humanize.AfterClick)
-		page.MustWaitStable()
-		return nil
+	humanize.Delay(ctx, humanize.BeforeClick)
+	if err := humanize.Click(elem); err != nil {
+		return fmt.Errorf("切换到 %s 失败: %w", label, err)
 	}
-	return fmt.Errorf("未找到子 tab %q", label)
+	humanize.Delay(ctx, humanize.AfterClick)
+	started := time.Now()
+	if err := waitProfilePageReady(page, tab); err != nil {
+		return fmt.Errorf("等待 %s 数据失败: %w", label, err)
+	}
+	logPhase("profile_tab_ready", started)
+	return nil
 }

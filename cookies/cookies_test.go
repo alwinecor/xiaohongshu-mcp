@@ -15,6 +15,8 @@ func TestGetCookiesFilePath(t *testing.T) {
 	t.Run("显式指定的COOKIES_PATH永远最优先", func(t *testing.T) {
 		dir := t.TempDir()
 		t.Setenv("TMPDIR", dir)
+		t.Setenv("TMP", dir)
+		t.Setenv("TEMP", dir)
 		t.Setenv("COOKIES_PATH", "/custom/cookies.json")
 
 		// 即使 /tmp 下躺着旧文件，也不能盖掉显式配置
@@ -26,6 +28,8 @@ func TestGetCookiesFilePath(t *testing.T) {
 	t.Run("未设COOKIES_PATH时本地目录优先于tmp", func(t *testing.T) {
 		tmp := t.TempDir()
 		t.Setenv("TMPDIR", tmp)
+		t.Setenv("TMP", tmp)
+		t.Setenv("TEMP", tmp)
 		t.Setenv("COOKIES_PATH", "")
 
 		assert.NoError(t, os.WriteFile(filepath.Join(tmp, "cookies.json"), []byte("[]"), 0644))
@@ -39,6 +43,8 @@ func TestGetCookiesFilePath(t *testing.T) {
 	t.Run("本地没有时兜底到tmp旧路径", func(t *testing.T) {
 		tmp := t.TempDir()
 		t.Setenv("TMPDIR", tmp)
+		t.Setenv("TMP", tmp)
+		t.Setenv("TEMP", tmp)
 		t.Setenv("COOKIES_PATH", "")
 		t.Chdir(t.TempDir()) // 本地目录是空的
 
@@ -51,6 +57,8 @@ func TestGetCookiesFilePath(t *testing.T) {
 	t.Run("都不存在时回退当前目录", func(t *testing.T) {
 		dir := t.TempDir()
 		t.Setenv("TMPDIR", dir)
+		t.Setenv("TMP", dir)
+		t.Setenv("TEMP", dir)
 		t.Setenv("COOKIES_PATH", "")
 		t.Chdir(t.TempDir())
 

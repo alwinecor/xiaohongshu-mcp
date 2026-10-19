@@ -115,10 +115,15 @@ func (s *SearchAction) Search(ctx context.Context, keyword string, filters ...Fi
 	page := s.page.Context(ctx).Timeout(60 * time.Second)
 
 	searchURL := makeSearchURL(keyword)
+	phaseStarted := time.Now()
 	page.MustNavigate(searchURL)
-	page.MustWaitStable()
-	page.MustWait(`() => window.__INITIAL_STATE__ !== undefined`)
+	logPhase("search_navigate", phaseStarted)
+	phaseStarted = time.Now()
+	waitSearchPageReady(page)
+	logPhase("search_ready", phaseStarted)
+	phaseStarted = time.Now()
 	humanize.Delay(ctx, humanize.AfterNavigate)
+	logPhase("search_delay", phaseStarted)
 
 	if len(pending) > 0 {
 		// 悬停在筛选按钮上展开面板
