@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/go-rod/rod"
-	"github.com/sirupsen/logrus"
 	"github.com/xpzouying/xiaohongshu-mcp/humanize"
 )
 
@@ -97,14 +96,17 @@ func NewNotificationAction(page *rod.Page) *NotificationAction {
 
 // UnreadCount 读取三个分区的未读数。
 func (n *NotificationAction) UnreadCount(ctx context.Context) (*NotificationCount, error) {
-	page := n.page.Timeout(60 * time.Second)
-
-	page.MustNavigate("https://www.xiaohongshu.com/explore").MustWaitLoad()
-	humanize.Delay(ctx, humanize.AfterNavigate)
-
-	if err := page.WaitStable(time.Second); err != nil {
-		logrus.Warnf("explore 页未稳定，继续读取未读数: %v", err)
+	page := n.page.Context(ctx).Timeout(60 * time.Second)
+	started := time.Now()
+	if err := page.Navigate("https://www.xiaohongshu.com/explore"); err != nil {
+		return nil, fmt.Errorf("打开未读数页面失败: %w", err)
 	}
+	logPhase("unread_navigate", started)
+	started = time.Now()
+	if err := waitUnreadPageReady(page); err != nil {
+		return nil, fmt.Errorf("等待未读数失败: %w", err)
+	}
+	logPhase("unread_ready", started)
 
 	res, err := page.Eval(`() => {
 		const s = window.__INITIAL_STATE__;
