@@ -802,6 +802,29 @@ func (s *AppServer) handleReplyNotification(ctx context.Context, commentID, cont
 	return marshalMCPResult(result, "回复")
 }
 
+// handleListDMConversations 读取私信会话列表。
+func (s *AppServer) handleListDMConversations(ctx context.Context, args ListDMConversationsArgs) *MCPToolResult {
+	logrus.Info("MCP: 读取私信会话列表")
+	result, err := s.xiaohongshuService.ListDMConversations(ctx, args.Page, args.Limit)
+	if err != nil {
+		return &MCPToolResult{Content: []MCPContent{{Type: "text", Text: "读取私信会话失败: " + err.Error()}}, IsError: true}
+	}
+	return marshalMCPResult(result, "读取私信会话")
+}
+
+func (s *AppServer) handleGetDMMessages(ctx context.Context, args GetDMMessagesArgs) *MCPToolResult {
+	logrus.Info("MCP: 读取私信内容")
+	lastID, err := args.cursor()
+	if err != nil {
+		return &MCPToolResult{Content: []MCPContent{{Type: "text", Text: err.Error()}}, IsError: true}
+	}
+	result, err := s.xiaohongshuService.GetDMMessages(ctx, args.UserID, args.Limit, lastID)
+	if err != nil {
+		return &MCPToolResult{Content: []MCPContent{{Type: "text", Text: "读取私信失败: " + err.Error()}}, IsError: true}
+	}
+	return marshalMCPResult(result, "读取私信")
+}
+
 // marshalMCPResult 把结果序列化成 MCP 文本内容。
 func marshalMCPResult(result any, action string) *MCPToolResult {
 	jsonData, err := json.MarshalIndent(result, "", "  ")

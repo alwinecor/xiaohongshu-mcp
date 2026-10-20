@@ -393,6 +393,44 @@ func (s *AppServer) replyNotificationHandler(c *gin.Context) {
 	respondSuccess(c, map[string]any{"data": result}, "回复成功")
 }
 
+// listDMConversationsHandler 读取私信会话列表。
+func (s *AppServer) listDMConversationsHandler(c *gin.Context) {
+	var args ListDMConversationsArgs
+	if err := c.ShouldBindQuery(&args); err != nil {
+		respondError(c, http.StatusBadRequest, "INVALID_REQUEST", "请求参数错误", err.Error())
+		return
+	}
+	result, err := s.xiaohongshuService.ListDMConversations(c.Request.Context(), args.Page, args.Limit)
+	if err != nil {
+		respondError(c, http.StatusInternalServerError, "LIST_DM_CONVERSATIONS_FAILED", "读取私信会话失败", err.Error())
+		return
+	}
+	respondSuccess(c, map[string]any{"data": result}, "读取私信会话成功")
+}
+
+func (s *AppServer) getDMMessagesHandler(c *gin.Context) {
+	var args GetDMMessagesArgs
+	if err := c.ShouldBindQuery(&args); err != nil {
+		respondError(c, http.StatusBadRequest, "INVALID_REQUEST", "请求参数错误", err.Error())
+		return
+	}
+	lastID, err := args.cursor()
+	if err != nil {
+		respondError(c, http.StatusBadRequest, "INVALID_REQUEST", "请求参数错误", err.Error())
+		return
+	}
+	if err := xiaohongshu.ValidateDMMessageOptions(args.UserID, args.Limit, lastID); err != nil {
+		respondError(c, http.StatusBadRequest, "INVALID_REQUEST", "请求参数错误", err.Error())
+		return
+	}
+	result, err := s.xiaohongshuService.GetDMMessages(c.Request.Context(), args.UserID, args.Limit, lastID)
+	if err != nil {
+		respondError(c, http.StatusInternalServerError, "GET_DM_MESSAGES_FAILED", "读取私信失败", err.Error())
+		return
+	}
+	respondSuccess(c, map[string]any{"data": result}, "读取私信成功")
+}
+
 // likeNotificationHandler 给通知里的评论点赞/取消点赞
 func (s *AppServer) likeNotificationHandler(c *gin.Context) {
 	var req LikeNotificationRequest

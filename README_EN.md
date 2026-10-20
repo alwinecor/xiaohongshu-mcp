@@ -916,6 +916,12 @@ After successful connection, you can use the following MCP tools:
   - `reply_limit`: Skip comments with too many replies (optional), only effective when click_more_replies=true, default 10
   - `scroll_speed`: Scroll speed (optional), `slow` | `normal` | `fast`, only effective when load_all_comments=true
 - `post_comment_to_feed` - Post comments to RedNote posts (required: feed_id, xsec_token, content)
+- `list_dm_conversations` - Read personal DM conversations, latest content and unread counts (`page`: zero-based; `limit`: default 20, max 100).
+- `get_dm_messages` - Read messages for a `user_id` from the conversation list; optional `limit` and string cursor `last_id`.
+  - Reuses the existing browser login, without requiring the business messaging service. Does not send messages or mark them read.
+  - Text is returned in `content.text`; cards and unknown types are preserved in `content.data`. Attachments are not downloaded and revoked content is omitted.
+  - Messages are ordered oldest first within the page. When `has_more` is true, pass `next_last_id` unchanged as a string to read earlier messages. A full page indicates that more messages may exist.
+  - Personal conversations only. Availability depends on the account's access to the main website messaging endpoints. See [HTTP API](./docs/API.md#私信内容读取).
 - `reply_comment_in_feed` - Reply to a specific comment under a note (required: feed_id, xsec_token, content, and at least one of comment_id or user_id)
 - `like_feed` - Like / unlike a note (required: feed_id, xsec_token)
   - `unlike`: Whether to unlike (optional), true to unlike, default is like

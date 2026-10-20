@@ -886,6 +886,12 @@ npx mcporter list xiaohongshu-mcp
 - `check_login_status` - 检查小红书登录状态（无参数）
 - `get_login_qrcode` - 获取登录二维码，返回 Base64 图片和超时时间（无参数）
 - `delete_cookies` - 删除 cookies 文件，重置登录状态，删除后需要重新登录（无参数）
+- `list_dm_conversations` - 只读获取个人私信会话、最近消息和未读数（可选：`page` 从0开始，`limit` 默认20、最大100）
+- `get_dm_messages` - 只读获取指定会话的消息（必需：`user_id`，从会话列表获取；可选：`limit`、游标字符串 `last_id`）
+  - 无需私信通权限，复用现有网页登录态；不发送私信、不清除未读标记。
+  - 文本在 `content.text`，卡片和未知类型的内容保留在 `content.data`；不下载附件，已撤回消息不返回正文。
+  - 消息按时间从旧到新返回。`has_more` 为 true 时，可把 `next_last_id` 字符串原样传给 `last_id` 读取更早消息；满页只表示可能还有下一页。
+  - 只覆盖主站可访问的个人私信；账号未开放、登录失效或页面接口变化时返回错误。详见 [HTTP API 文档](./docs/API.md#私信内容读取)。
 - `publish_content` - 发布图文内容到小红书（必需：title, content, images）
   - `images`: 图片路径列表（至少1张），支持 HTTP 链接或本地绝对路径，推荐使用本地路径
   - `tags`: 话题标签列表（可选），如 `["美食", "旅行", "生活"]`

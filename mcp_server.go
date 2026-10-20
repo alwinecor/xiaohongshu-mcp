@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"runtime/debug"
+	"strconv"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/sirupsen/logrus"
@@ -122,6 +123,29 @@ type LikeNotificationArgs struct {
 type ReplyNotificationArgs struct {
 	CommentID string `json:"comment_id" jsonschema:"目标评论ID，从 list_notifications 的 comment_id 字段获取"`
 	Content   string `json:"content" jsonschema:"回复内容"`
+}
+
+// ListDMConversationsArgs 私信会话列表参数。
+type ListDMConversationsArgs struct {
+	Page  int `json:"page,omitempty" form:"page" binding:"gte=0" jsonschema:"会话页码，从0开始，默认0"`
+	Limit int `json:"limit,omitempty" form:"limit" binding:"gte=0,lte=100" jsonschema:"每页条数，1至100，默认20"`
+}
+
+type GetDMMessagesArgs struct {
+	UserID string `json:"user_id" form:"user_id" binding:"required" jsonschema:"对方用户ID，从 list_dm_conversations 返回的 user_id 获取"`
+	Limit  int    `json:"limit,omitempty" form:"limit" binding:"gte=0,lte=100" jsonschema:"消息条数，1至100，默认20"`
+	LastID string `json:"last_id,omitempty" form:"last_id" jsonschema:"历史消息游标字符串，首次不填，继续读取时原样传上次的 next_last_id"`
+}
+
+func (args GetDMMessagesArgs) cursor() (int64, error) {
+	if args.LastID == "" {
+		return 0, nil
+	}
+	id, err := strconv.ParseInt(args.LastID, 10, 64)
+	if err != nil || id < 0 {
+		return 0, fmt.Errorf("last_id 必须是非负整数的字符串")
+	}
+	return id, nil
 }
 
 // InitMCPServer 初始化 MCP Server
@@ -548,7 +572,19 @@ func registerTools(server *mcp.Server, appServer *AppServer) {
 		}),
 	)
 
-	logrus.Infof("Registered %d MCP tools", 18)
+	mcp.AddTool(server,
+		&mcp.Tool{Name: "list_dm_conversations", Description: "只读获取当前账号的私信会话列表，包含对方 user_id、最近消息内容及未读数。无需私信通，不清除未读标记。仅个人会话。", Annotations: &mcp.ToolAnnotations{Title: "List DM Conversations", ReadOnlyHint: true}},
+		withPanicRecovery("list_dm_conversations", func(ctx context.Context, req *mcp.CallToolRequest, args ListDMConversationsArgs) (*mcp.CallToolResult, any, error) {
+			return convertToMCPResult(appServer.handleListDMConversations(ctx, args)), nil, nil
+		}),
+	)
+	mcp.AddTool(server,
+		&mcp.Tool{Name: "get_dm_messages", Description: "只读获取指定用户的私信消息，按时间从旧到新返回。文本在 content.text，卡片或未知类型在 content.data。不清除未读标记、不发送消息。has_more 表示可能有更早消息。", Annotations: &mcp.ToolAnnotations{Title: "Get DM Messages", ReadOnlyHint: true}},
+		withPanicRecovery("get_dm_messages", func(ctx context.Context, req *mcp.CallToolRequest, args GetDMMessagesArgs) (*mcp.CallToolResult, any, error) {
+			return convertToMCPResult(appServer.handleGetDMMessages(ctx, args)), nil, nil
+		}),
+	)
+	logrus.Infof("Registered %d MCP tools", 20)
 }
 
 // convertToMCPResult 将自定义的 MCPToolResult 转换为官方 SDK 的格式
