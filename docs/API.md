@@ -64,10 +64,73 @@ Token 缺失或无效时，接口返回 HTTP `401 Unauthorized`。命令行参�
 | POST | `/api/v1/feeds/comment/reply` | 回复评论 |
 | POST | `/api/v1/feeds/like` | 点赞/取消点赞 |
 | POST | `/api/v1/feeds/favorite` | 收藏/取消收藏 |
+| GET | `/api/v1/dm/conversations` | 只读获取个人私信会话 |
+| GET | `/api/v1/dm/messages` | 只读获取指定会话内容 |
 
 ---
 
 ## API 端点
+
+### 私信内容读取
+
+复用现有网页登录态，不需要私信通；只读取账号在主站可访问的个人会话，不支持群聊。接口不进入聊天页、不发送消息或清除未读标记；每次调用使用原项目的浏览器生命周期。账号权限、登录态或上游接口变化可能导致读取失败。
+
+先读取会话：
+
+```http
+GET /api/v1/dm/conversations?page=0&limit=20
+```
+
+`page` 为非负页码，默认0；`limit` 默认20，范围1–100（0也使用默认值）。响应沿用已有读取接口的包装，结果在 `data.data`：
+
+```json
+{
+  "success": true,
+  "data": {
+    "data": {
+      "conversations": [{
+        "user_id": "peer-user-id",
+        "nickname": "对方昵称",
+        "last_time": 1800000000,
+        "last_content": {"content_type": 1, "text": "你好"},
+        "unread_count": 1
+      }],
+      "page": 0,
+      "has_more": false
+    }
+  },
+  "message": "读取私信会话成功"
+}
+```
+
+把会话的 `user_id` 传给消息接口：
+
+```http
+GET /api/v1/dm/messages?user_id=peer-user-id&limit=20
+```
+
+可选 `last_id` 为非负整数的**字符串**，首次不传；继续读取时原样使用上一页的 `next_last_id`。消息按时间从旧到新排列，时间戳单位为秒。`store_id`、`next_last_id` 使用字符串保留64位精度。
+
+```json
+{
+  "user_id": "peer-user-id",
+  "messages": [{
+    "id": "message-id",
+    "sender_id": "peer-user-id",
+    "receiver_id": "self-user-id",
+    "created_at": 1800000000,
+    "store_id": "123",
+    "revoked": false,
+    "content": {"content_type": 1, "text": "你好"}
+  }],
+  "next_last_id": "123",
+  "has_more": false
+}
+```
+
+以上为 `data.data` 内的结果。文本在 `content.text`；卡片和未知类型保留在 `content.data`，不下载图片、视频等附件。已撤回消息仅保留元数据，不返回原正文。`has_more` 为 true 代表可能还有更早消息，下一页允许为空。无消息时 `messages` 为 `[]`。非法参数返回400；上游拒绝、结构变化或登录失效返回明确错误，不作为空收件箱处理。
+
+对应 MCP 工具为 `list_dm_conversations` 和 `get_dm_messages`，参数同名；MCP 返回的 JSON 直接为结果对象，无 HTTP 包装。
 
 ### 1. 健康检查
 

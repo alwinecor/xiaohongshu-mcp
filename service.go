@@ -624,6 +624,30 @@ func newBrowser() *headless_browser.Browser {
 	)
 }
 
+// ListDMConversations 复用现有浏览器会话读取私信列表。
+func (s *XiaohongshuService) ListDMConversations(ctx context.Context, pageNumber, limit int) (result *xiaohongshu.DMConversations, err error) {
+	if err = xiaohongshu.ValidateDMListOptions(pageNumber, limit); err != nil {
+		return nil, err
+	}
+	err = withBrowserPage(func(page *rod.Page) error {
+		result, err = xiaohongshu.NewDirectMessageAction(page).List(ctx, pageNumber, limit)
+		return err
+	})
+	return result, err
+}
+
+// GetDMMessages 只读取历史消息，不打开具体会话。
+func (s *XiaohongshuService) GetDMMessages(ctx context.Context, userID string, limit int, lastID int64) (result *xiaohongshu.DMMessages, err error) {
+	if err = xiaohongshu.ValidateDMMessageOptions(userID, limit, lastID); err != nil {
+		return nil, err
+	}
+	err = withBrowserPage(func(page *rod.Page) error {
+		result, err = xiaohongshu.NewDirectMessageAction(page).Messages(ctx, userID, limit, lastID)
+		return err
+	})
+	return result, err
+}
+
 func saveCookies(page *rod.Page) error {
 	cks, err := page.Browser().GetCookies()
 	if err != nil {
